@@ -46,12 +46,20 @@ RPMTOPDIR="$CACHEDIR/buildroot"
 VERSIONFILE="$CACHEDIR/version"
 TEMPDIR="$CACHEDIR/tmp"
 LOGFILE="$CACHEDIR/build.log"
-DEBUG=0
 SKIPCLEANUP=0
 SKIPGCCCHECK=0
 ARCH_KCFLAGS=""
 declare -a PATCH_LIST
 APPLIED_PATCHES=0
+
+# We currently define the following debug modes:
+#   DEBUG=1 (-d):   Sets 'xtrace' in kpatch-build.
+#   DEBUG=2 (-x 1): Writes everything that is written to the logfile also to stdout.
+#   DEBUG=3 (-x 2): Like DEBUG=2 plus sets 'xtrace' in kpatch-build.
+#   DEBUG=4 (-x 3): Like DEBUG=3 plus sets 'xtrace' in kpatch-gcc.
+# Additionally, if any debug mode is enabled, the temp files in $TEMPDIR are not
+# removed on exit of the script.
+DEBUG=0
 
 warn() {
 	echo "ERROR: $1" >&2
@@ -76,7 +84,7 @@ die() {
 logger() {
 	local to_stdout=${1:-0}
 
-	if [[ "$to_stdout" -eq 1 ]]; then
+	if [[ $DEBUG -ge 2 ]] || [[ "$to_stdout" -eq 1 ]]; then
 		# Log to both stdout and the logfile
 		tee -a "$LOGFILE"
 	else
@@ -378,14 +386,20 @@ usage() {
 	echo "		-t, --target       Specify custom kernel build targets" >&2
 	echo "		-n, --name         Specify the name of the kpatch module" >&2
 	echo "		-o, --output       Specify output folder" >&2
-	echo "		-d, --debug        Enable 'xtrace' and keep scratch files" >&2
-	echo "		                   in <CACHEDIR>/tmp" >&2
+	echo "		-d, --debug        Enable 'xtrace' and keep scratch files in" >&2
+	echo "		                   <CACHEDIR>/tmp" >&2
+	echo "		-x, --xdebug       Enable extra debugging mode" >&2
+	echo "		                   1: Increase verbosity and keep scratch" >&2
+	echo "		                      files in <CACHEDIR>/tmp" >&2
+	echo "		                   2: The above plus enable 'xtrace'" >&2
+	echo "		                   3: The above plus enable 'xtrace' in" >&2
+	echo "		                      kpatch-gcc" >&2
 	echo "		--skip-cleanup     Skip post-build cleanup" >&2
 	echo "		--skip-gcc-check   Skip gcc version matching check" >&2
 	echo "		                   (not recommended)" >&2
 }
 
-options="$(getopt -o ha:r:s:c:v:j:t:n:o:d -l "help,archversion:,sourcerpm:,sourcedir:,config:,vmlinux:,jobs:,target:,name:,output:,debug,skip-gcc-check,skip-cleanup" -- "$@")" || die "getopt failed"
+options="$(getopt -o ha:r:s:c:v:j:t:n:o:dx: -l "help,archversion:,sourcerpm:,sourcedir:,config:,vmlinux:,jobs:,target:,name:,output:,debug,xdebug:,skip-gcc-check,skip-cleanup" -- "$@")" || die "getopt failed"
 
 eval set -- "$options"
 
@@ -440,7 +454,12 @@ while [[ $# -gt 0 ]]; do
 	-d|--debug)
 		echo "DEBUG mode enabled"
 		DEBUG=1
-		set -o xtrace
+		;;
+	-x|--xdebug)
+		( [[ "$2" -ge 1 ]] && [[ "$2" -le 3 ]] ) || die "Invalid xdebug argument: '$2'"
+		echo "XDEBUG mode enabled"
+		DEBUG=$(($2 + 1))
+		shift
 		;;
 	--skip-cleanup)
 		echo "Skipping cleanup"
@@ -458,6 +477,10 @@ while [[ $# -gt 0 ]]; do
 	esac
 	shift
 done
+
+if [[ $DEBUG -eq 1 ]] || [[ $DEBUG -ge 3 ]]; then
+	set -o xtrace
+fi
 
 if [[ ${#PATCH_LIST[@]} -eq 0 ]]; then
 	warn "no patch file(s) specified"
@@ -680,6 +703,10 @@ export KCFLAGS="-I$DATADIR/patch -ffunction-sections -fdata-sections $ARCH_KCFLA
 
 echo "Reading special section data"
 find_special_section_data
+
+if [[ $DEBUG -ge 4 ]]; then
+	export KPATCH_GCC_DEBUG=1
+fi
 
 echo "Building original kernel"
 ./scripts/setlocalversion --save-scmversion || die
